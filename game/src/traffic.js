@@ -1,153 +1,82 @@
-// Traffic: the cars that fill the roads, and the parked cars waiting to be
-// stolen. Traffic cars drive in lanes (right-hand side), slow for the car
-// ahead, and sometimes turn at an intersection. Parked cars sit at the kerb.
+// Vice Harbor — traffic AI. Civilian cars pick an avenue or street, drive the
+// correct lane, slow for the car ahead, brake at junctions when cross traffic is
+// passing, and turn at intersections. When the player steals one, its driver
+// bails out and flees on foot (handled by main through the flee flag here).
 
-import { CAR_COLORS, TRAFFIC } from './config.js';
-import { randomPick, randomRange } from './random.js';
-import { distance } from './geo.js';
+import { AVENUES, STREETS, WORLD } from './config.js';
+import { angleLerp, clamp, distance, laneOffset, nearestAvenue, nearestStreet } from './geo.js';
+import { createCar } from './vehicles.js';
 
-function nextCarId(game) {
-  game.carSeq = (game.carSeq ?? 0) + 1;
-  return game.carSeq;
-}
+const KINDS = ['compact', 'sedan', 'sedan', 'taxi', 'compact', 'truck'];
 
-/** Build a car object; `opts` marks it parked, traffic or police. */
-export function makeCar(game, x, y, angle, opts) {
-  return {
-    id: nextCarId(game),
-    x, y, angle,
-    speed: opts.speed ?? 0,
-    color: opts.color ?? randomPick(game.rng, CAR_COLORS),
-    length: 46,
-    width: 22,
-    parked: opts.parked ?? false,
-    traffic: opts.traffic ?? false,
-    police: opts.police ?? false,
-    driver: opts.driver ?? null,
-    axis: opts.axis ?? 'v',
-    dir: opts.dir ?? 1,
-    lastIntersection: '',
-    ramCooldown: 0,
-    leaveTimer: 0,
-  };
-}
-
-/** Parked cars along the kerbs, ready to be taken. */
-export function spawnParkedCars(game) {
-  const { city, rng } = game;
-  for (let i = 0; i < TRAFFIC.parkedCount; i += 1) {
-    const vertical = rng() < 0.5;
-    const road = vertical
-      ? randomPick(rng, city.roadsV)
-      : randomPick(rng, city.roadsH);
-    const along = randomRange(rng, 200, vertical ? 2200 : 2200);
-    const side = randomPick(rng, [-1, 1]);
-    const x = vertical ? road + side * 56 : along;
-    const y = vertical ? along : road + side * 56;
-    const angle = vertical ? (side > 0 ? Math.PI / 2 : -Math.PI / 2) : (side > 0 ? 0 : Math.PI);
-    const car = makeCar(game, x, y, angle, { parked: true });
-    game.cars.push(car);
+export function spawnTrafficCar(rng, nearX, nearY) {
+  const vertical = rng.chance(0.5);
+  const dir = rng.chance(0.5) ? 1 : -1;
+  let x; let y; let angle;
+  if (vertical) {
+    const av = rng.pick(AVENUES);
+    x = av + laneOffset(dir);
+    y = clamp(nearY + rng.range(-700, 700), 90, WORLD.height - 90);
+    angle = dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+  } else {
+    const st = rng.pick(STREETS);
+    y = st + laneOffset(dir);
+    x = clamp(nearX + rng.range(-700, 700), 90, 2780);
+    angle = dir > 0 ? 0 : Math.PI;
   }
+  const car = createCar(rng.pick(KINDS), x, y, angle, rng);
+  car.traffic = { vertical, dir, speed: rng.range(95, 150), turnCooldown: rng.range(1, 4) };
+  car.driver = { civilian: true };
+  return car;
 }
 
-/** Moving traffic, spread over the road grid. */
-export function spawnTrafficCars(game) {
-  const { city, rng } = game;
-  for (let i = 0; i < TRAFFIC.count; i += 1) {
-    const vertical = rng() < 0.5;
-    const road = vertical
-      ? randomPick(rng, city.roadsV)
-      : randomPick(rng, city.roadsH);
-    const dir = randomPick(rng, [-1, 1]);
-    const along = randomRange(rng, 200, 2200);
-    const lane = dir > 0 ? 24 : -24;
-    const x = vertical ? road + lane : along;
-    const y = vertical ? along : road + lane;
-    const angle = vertical ? (dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (dir > 0 ? 0 : Math.PI);
-    const speed = randomRange(rng, TRAFFIC.cruiseMin, TRAFFIC.cruiseMax);
-    game.cars.push(makeCar(game, x, y, angle, {
-      traffic: true, speed, axis: vertical ? 'v' : 'h', dir,
-    }));
+export function maintainTraffic(G, dt) {
+  const p = G.player;
+  let near = 0;
+  for (const car of G.cars) if (car.traffic && distance(car.x, car.y, p.x, p.y) < 900) near += 1;
+  G.spawnTimer -= dt;
+  if (near < 15 && G.spawnTimer <= 0) {
+    G.spawnTimer = 0.7;
+    const car = spawnTrafficCar(G.rng, p.x, p.y);
+    if (distance(car.x, car.y, p.x, p.y) > 260) G.cars.push(car);
   }
+  // Despawn far-away traffic so the streets near the player stay dense.
+  G.cars = G.cars.filter((car) => !car.traffic || car === p.car || distance(car.x, car.y, p.x, p.y) < 1150);
 }
 
-/** Is there a car ahead of `car` within `range`, along its heading? */
-function carAhead(game, car, range) {
-  const fx = Math.cos(car.angle);
-  const fy = Math.sin(car.angle);
-  let nearest = null;
-  let nearestDist = range;
-  for (const other of game.cars) {
-    if (other === car || other.parked) continue;
-    const dx = other.x - car.x;
-    const dy = other.y - car.y;
-    const along = dx * fx + dy * fy;
-    if (along <= 10 || along >= nearestDist) continue;
-    const side = Math.abs(-dx * fy + dy * fx);
-    if (side > 26) continue;
-    nearest = other;
-    nearestDist = along;
+export function updateTrafficCar(G, car, dt) {
+  const t = car.traffic;
+  if (!t) return;
+  t.turnCooldown -= dt;
+  let targetSpeed = t.speed;
+  // Slow for whoever is ahead in the same lane.
+  for (const other of G.cars) {
+    if (other === car || other.dead) continue;
+    const aheadX = car.x + Math.cos(car.angle) * 58;
+    const aheadY = car.y + Math.sin(car.angle) * 58;
+    if (distance(aheadX, aheadY, other.x, other.y) < 34) targetSpeed = Math.min(targetSpeed, Math.abs(other.speed) * 0.8);
   }
-  return nearest;
-}
-
-function turnAtIntersection(game, car, dt) {
-  const { city } = game;
-  const cross = car.axis === 'v' ? city.roadsH : city.roadsV;
-  const along = car.axis === 'v' ? car.y : car.x;
-  for (const road of cross) {
-    if (Math.abs(along - road) > 22) continue;
-    const key = `${car.axis}:${road}`;
-    if (car.lastIntersection === key) return;
-    car.lastIntersection = key;
-    if (game.rng() > 0.3) return;
-    const newDir = randomPick(game.rng, [-1, 1]);
-    if (car.axis === 'v') {
-      car.axis = 'h';
-      car.dir = newDir;
-      car.y = road + (newDir > 0 ? 24 : -24);
-      car.angle = newDir > 0 ? 0 : Math.PI;
-    } else {
-      car.axis = 'v';
-      car.dir = newDir;
-      car.x = road + (newDir > 0 ? 24 : -24);
-      car.angle = newDir > 0 ? Math.PI / 2 : -Math.PI / 2;
+  if (G.player.car === null && distance(car.x, car.y, G.player.x, G.player.y) < 52) targetSpeed = 0;
+  // Brake at junctions when cross traffic crosses.
+  const junctionX = nearestAvenue(car.x); const junctionY = nearestStreet(car.y);
+  if (Math.abs(car.x - junctionX) < 74 && Math.abs(car.y - junctionY) < 74) {
+    for (const other of G.cars) {
+      if (other !== car && Math.abs(other.x - junctionX) < 60 && Math.abs(other.y - junctionY) < 60 && Math.abs(other.speed) > 12) { targetSpeed = Math.min(targetSpeed, 20); break; }
     }
-    return;
   }
-}
-
-function edgeTurn(car) {
-  // Reached the edge of the city: turn around and head back along the same road.
-  if (car.axis === 'v') {
-    if (car.y < 160 || car.y > 2240) {
-      car.dir *= -1;
-      car.angle += Math.PI;
-      car.x += car.dir > 0 ? 48 : -48;
-    }
-  } else if (car.x < 160 || car.x > 3040) {
-    car.dir *= -1;
-    car.angle += Math.PI;
-    car.y += car.dir > 0 ? 48 : -48;
+  car.speed += clamp(targetSpeed - Math.abs(car.speed), -260 * dt, 120 * dt) * Math.sign(car.speed || 1);
+  if (Math.abs(car.speed) < 4 && targetSpeed > 0) car.speed = 30 * (t.dir > 0 ? 1 : 1);
+  const want = t.vertical ? (t.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (t.dir > 0 ? 0 : Math.PI);
+  // Occasionally turn at a junction: swap axis, keep right-hand lane.
+  if (t.turnCooldown <= 0 && Math.abs(car.x - junctionX) < 10 && Math.abs(car.y - junctionY) < 10 && G.rng.chance(0.4)) {
+    t.vertical = !t.vertical;
+    t.dir = G.rng.chance(0.5) ? 1 : -1;
+    t.turnCooldown = 3;
   }
-}
-
-/** Advance every traffic car one step. */
-export function stepTraffic(game, dt) {
-  for (const car of game.cars) {
-    if (!car.traffic) continue;
-    const ahead = carAhead(game, car, 90);
-    let target = car.cruiseSpeed ?? (car.cruiseSpeed = TRAFFIC.cruiseMin + game.rng() * (TRAFFIC.cruiseMax - TRAFFIC.cruiseMin));
-    if (ahead) {
-      const gap = distance(car.x, car.y, ahead.x, ahead.y);
-      target = gap < 44 ? 0 : Math.min(target, ahead.speed * 0.85);
-    }
-    car.speed += (target - car.speed) * Math.min(1, dt * 2.5);
-    turnAtIntersection(game, car, dt);
-    const fx = Math.cos(car.angle);
-    const fy = Math.sin(car.angle);
-    car.x += fx * car.speed * dt;
-    car.y += fy * car.speed * dt;
-    edgeTurn(car);
-  }
+  const laneTarget = t.vertical ? junctionX + laneOffset(t.dir) : junctionY + laneOffset(t.dir);
+  const drift = t.vertical ? (laneTarget - car.x) * 0.02 : (laneTarget - car.y) * 0.02;
+  car.angle = angleLerp(car.angle, want + (t.vertical ? drift : -drift) * 0.4, dt * 3);
+  car.x += Math.cos(car.angle) * car.speed * dt;
+  car.y += Math.sin(car.angle) * car.speed * dt;
+  if (car.x < 60 || car.x > 2840 || car.y < 60 || car.y > WORLD.height - 60) { t.dir *= -1; }
 }

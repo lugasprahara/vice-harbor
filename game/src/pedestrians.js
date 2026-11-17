@@ -1,130 +1,108 @@
-// Pedestrians: the people on the sidewalks. They stroll between sidewalk
-// points, run away from gunfire, crashes and the player swinging fists, and
-// fall when they are hit. The city keeps its count topped up.
+// Vice Harbor — pedestrians. Civilians stroll the sidewalks in crowds, each with
+// their own shirt colour and pace; they panic and flee from gunfire, crashes and
+// speeding cars, and some drop cash when knocked down. Mara, the story fixer, is
+// a special pedestrian who waits at mission markers and delivers dialogue.
 
-import { PEDS, PED_SHIRTS } from './config.js';
-import { randomPick, randomRange } from './random.js';
-import { angleTo, distance, resolveCircleVsCity } from './geo.js';
+import { STREETS, AVENUES, WORLD } from './config.js';
+import { angleLerp, clamp, distance } from './geo.js';
 
-/** A random sidewalk point: just off a road, never inside a building. */
-function sidewalkPoint(game) {
-  const { city, rng } = game;
-  for (let tries = 0; tries < 12; tries += 1) {
-    const vertical = rng() < 0.5;
-    const road = vertical ? randomPick(rng, city.roadsV) : randomPick(rng, city.roadsH);
-    const along = randomRange(rng, 160, 2240);
-    const side = randomPick(rng, [-1, 1]);
-    const x = vertical ? road + side * randomRange(rng, 58, 74) : along;
-    const y = vertical ? along : road + side * randomRange(rng, 58, 74);
-    if (x < 60 || x > 3060 || y < 60 || y > 2340) continue;
-    if (game.city.buildings.some((b) => x > b.x - 8 && x < b.x + b.w + 8 && y > b.y - 8 && y < b.y + b.h + 8)) continue;
-    return { x, y };
-  }
-  return { x: 700, y: 700 };
-}
+const SHIRTS = ['#ff6b81', '#f7c948', '#2ee6a8', '#54a0ff', '#eccc68', '#ff9ff3', '#48dbfb', '#f368e0', '#c8d6e5', '#ff9f43'];
+let nextPedId = 1;
 
-/** The next place a pedestrian strolls to: usually further along the same road's sidewalk. */
-function nextWalkTarget(game, ped) {
-  const { city, rng } = game;
-  let bestV = city.roadsV[0];
-  for (let i = 1; i < city.roadsV.length; i += 1) {
-    if (Math.abs(city.roadsV[i] - ped.x) < Math.abs(bestV - ped.x)) bestV = city.roadsV[i];
-  }
-  let bestH = city.roadsH[0];
-  for (let i = 1; i < city.roadsH.length; i += 1) {
-    if (Math.abs(city.roadsH[i] - ped.y) < Math.abs(bestH - ped.y)) bestH = city.roadsH[i];
-  }
-  const vertical = Math.abs(bestV - ped.x) <= Math.abs(bestH - ped.y);
-  const side = vertical
-    ? (ped.x >= bestV ? 1 : -1)
-    : (ped.y >= bestH ? 1 : -1);
-  const offset = 58 + rng() * 12;
-  const along = (vertical ? ped.y : ped.x) + (rng() < 0.5 ? -1 : 1) * (150 + rng() * 300);
-  if (vertical) {
-    return { x: bestV + side * offset, y: Math.max(120, Math.min(2280, along)) };
-  }
-  return { x: Math.max(120, Math.min(3080, along)), y: bestH + side * offset };
-}
-
-function makePed(game, x, y) {
-  const target = sidewalkPoint(game);
+export function createPedestrian(rng, x, y) {
   return {
-    x, y,
-    angle: randomRange(game.rng, 0, Math.PI * 2),
-    speed: randomRange(game.rng, PEDS.walkMin, PEDS.walkMax),
-    state: 'walk',
-    targetX: target.x,
-    targetY: target.y,
-    fleeX: 0,
-    fleeY: 0,
-    fleeTimer: 0,
-    deadTimer: 0,
-    shirt: randomPick(game.rng, PED_SHIRTS),
-    radius: 11,
+    id: nextPedId++, x, y, angle: rng.range(0, 6.28),
+    speed: rng.range(38, 66), walkPhase: rng.range(0, 6.28),
+    shirt: rng.pick(SHIRTS), skin: rng.pick(['#f1c27d', '#e0ac69', '#8d5524', '#ffdbac', '#6b4423']),
+    pants: rng.pick(['#2f3542', '#57606f', '#3b3b98', '#222f3e']),
+    panic: 0, health: 60, dead: false, fleeFrom: null, mara: false, name: '',
   };
 }
 
-export function spawnPedestrians(game) {
-  for (let i = 0; i < PEDS.count; i += 1) {
-    const point = sidewalkPoint(game);
-    game.peds.push(makePed(game, point.x, point.y));
+export function spawnCrowds(G) {
+  for (let i = 0; i < 64; i += 1) {
+    const onAvenue = G.rng.chance(0.55);
+    let x; let y;
+    if (onAvenue) { const av = G.rng.pick(AVENUES); x = av + (G.rng.chance(0.5) ? -82 : 82); y = G.rng.range(90, WORLD.height - 90); }
+    else { const st = G.rng.pick(STREETS); y = st + (G.rng.chance(0.5) ? -82 : 82); x = G.rng.range(90, 2780); }
+    G.peds.push(createPedestrian(G.rng, x, y));
   }
 }
 
-/** Every pedestrian within `radius` of (x, y) runs away from it. */
-export function scatterPeds(game, x, y, radius) {
-  for (const ped of game.peds) {
-    if (ped.state === 'dead') continue;
-    if (distance(ped.x, ped.y, x, y) < radius) {
-      ped.state = 'flee';
-      ped.fleeX = x;
-      ped.fleeY = y;
-      ped.fleeTimer = 2.5;
+export function maintainCrowds(G, dt) {
+  G.pedTimer -= dt;
+  if (G.pedTimer <= 0) {
+    G.pedTimer = 1.1;
+    let near = 0;
+    for (const ped of G.peds) if (!ped.mara && distance(ped.x, ped.y, G.player.x, G.player.y) < 800) near += 1;
+    if (near < 26) {
+      const a = G.rng.range(0, Math.PI * 2);
+      const d = G.rng.range(480, 720);
+      const x = clamp(G.player.x + Math.cos(a) * d, 70, 2820);
+      const y = clamp(G.player.y + Math.sin(a) * d, 70, WORLD.height - 70);
+      G.peds.push(createPedestrian(G.rng, x, y));
     }
+    G.peds = G.peds.filter((ped) => ped.mara || distance(ped.x, ped.y, G.player.x, G.player.y) < 1000);
   }
 }
 
-/** Advance every pedestrian one step. */
-export function stepPedestrians(game, dt) {
-  for (const ped of game.peds) {
-    if (ped.state === 'dead') {
-      ped.deadTimer -= dt;
-      if (ped.deadTimer <= 0) {
-        // A fresh face takes their place, far from the player.
-        const point = sidewalkPoint(game);
-        const fresh = makePed(game, point.x, point.y);
-        Object.assign(ped, fresh);
-      }
-      continue;
-    }
-    if (ped.state === 'wait') {
-      // A waiting taxi passenger: stands at the kerb until picked up.
-      continue;
-    }
-    if (ped.state === 'flee') {
-      ped.fleeTimer -= dt;
-      const away = angleTo(ped.fleeX, ped.fleeY, ped.x, ped.y);
-      ped.angle = away;
-      ped.x += Math.cos(away) * PEDS.fleeSpeed * dt;
-      ped.y += Math.sin(away) * PEDS.fleeSpeed * dt;
-      resolveCircleVsCity(game.city, ped, ped.radius);
-      if (ped.fleeTimer <= 0) {
-        ped.state = 'walk';
-        const target = nextWalkTarget(game, ped);
-        ped.targetX = target.x;
-        ped.targetY = target.y;
-      }
-      continue;
-    }
-    const targetAngle = angleTo(ped.x, ped.y, ped.targetX, ped.targetY);
-    ped.angle = targetAngle;
-    ped.x += Math.cos(targetAngle) * ped.speed * dt;
-    ped.y += Math.sin(targetAngle) * ped.speed * dt;
-    resolveCircleVsCity(game.city, ped, ped.radius);
-    if (distance(ped.x, ped.y, ped.targetX, ped.targetY) < 14) {
-      const target = nextWalkTarget(game, ped);
-      ped.targetX = target.x;
-      ped.targetY = target.y;
-    }
+export function scarePeds(G, x, y, radius) {
+  for (const ped of G.peds) {
+    if (ped.mara || ped.dead) continue;
+    if (distance(ped.x, ped.y, x, y) < radius) { ped.panic = G.rng.range(2.2, 4); ped.fleeFrom = { x, y }; }
   }
+}
+
+export function updatePedestrian(G, ped, dt) {
+  if (ped.dead || ped.mara) return;
+  ped.walkPhase += dt * (ped.panic > 0 ? 13 : 7);
+  let want = ped.angle;
+  let speed = ped.speed;
+  if (ped.panic > 0 && ped.fleeFrom) {
+    ped.panic -= dt;
+    want = Math.atan2(ped.y - ped.fleeFrom.y, ped.x - ped.fleeFrom.x);
+    speed = 175;
+  } else if (G.rng.chance(dt * 0.14)) {
+    want = G.rng.range(0, Math.PI * 2);
+  }
+  ped.angle = angleLerp(ped.angle, want, dt * 5);
+  const nx = ped.x + Math.cos(ped.angle) * speed * dt;
+  const ny = ped.y + Math.sin(ped.angle) * speed * dt;
+  let blocked = false;
+  for (const b of G.world.buildings) if (nx > b.x - 8 && nx < b.x + b.w + 8 && ny > b.y - 8 && ny < b.y + b.h + 8) { blocked = true; break; }
+  if (!blocked && nx > 40 && nx < 2880 && ny > 40 && ny < WORLD.height - 40) { ped.x = nx; ped.y = ny; }
+  else ped.angle += 2.4 * dt;
+}
+
+export function drawPedestrian(ctx, ped, time) {
+  ctx.save();
+  ctx.translate(ped.x, ped.y);
+  const bob = Math.sin(ped.walkPhase) * 1.6;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath(); ctx.ellipse(0, 5, 8, 4, 0, 0, 6.29); ctx.fill();
+  if (ped.dead) {
+    ctx.rotate(Math.PI / 2);
+    ctx.fillStyle = ped.shirt; ctx.fillRect(-10, -4, 20, 8);
+    ctx.fillStyle = ped.skin; ctx.beginPath(); ctx.arc(13, 0, 5, 0, 6.29); ctx.fill();
+    ctx.restore();
+    return;
+  }
+  // Legs scissor as they walk, torso, head.
+  ctx.strokeStyle = ped.pants; ctx.lineWidth = 3.4;
+  ctx.beginPath();
+  ctx.moveTo(0, 0); ctx.lineTo(Math.sin(ped.walkPhase) * 5, 8);
+  ctx.moveTo(0, 0); ctx.lineTo(-Math.sin(ped.walkPhase) * 5, 8);
+  ctx.stroke();
+  ctx.fillStyle = ped.mara ? '#ffd23e' : ped.shirt;
+  ctx.beginPath(); ctx.roundRect(-5.5, -6 + bob * 0.3, 11, 12, 4); ctx.fill();
+  ctx.fillStyle = ped.skin;
+  ctx.beginPath(); ctx.arc(0, -10 + bob * 0.3, 5.2, 0, 6.29); ctx.fill();
+  if (ped.mara) {
+    ctx.fillStyle = '#ffd23e';
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('!', 0, -24 + Math.sin(time * 3) * 2);
+    ctx.font = 'bold 9px sans-serif';
+    ctx.fillText('MARA', 0, -34);
+  }
+  ctx.restore();
 }

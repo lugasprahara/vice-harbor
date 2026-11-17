@@ -1,169 +1,123 @@
-// The player, on foot and behind the wheel. On foot: walk and run, facing the
-// way they move. In a car: acceleration, braking, steering that bites harder
-// the faster the car goes, and crashes that stop it dead. E gets in and out;
-// stealing a car somebody watches is a crime.
+// Vice Harbor — vehicles: the car factory, shared driving physics (acceleration,
+// steering, drift and building collision) and the canvas drawing for every class —
+// compact, sedan, taxi, truck, patrol car and interceptor, each with its own
+// silhouette, plus flashing light bars and headlight glow for police units.
 
-import { CAR, PLAYER, WANTED } from './config.js';
-import { distance, resolveCircleVsCity, turnToward } from './geo.js';
-import { scatterPeds } from './pedestrians.js';
-import { addWanted, witnessNear } from './police.js';
-import { setToast } from './world.js';
+import { CAR_CLASSES } from './config.js';
+import { clamp, rectsOverlap } from './geo.js';
 
-/** The nearest car the player could get into, or null. */
-export function nearestCar(game, x, y, maxDist) {
-  let best = null;
-  let bestDist = maxDist;
-  for (const car of game.cars) {
-    if (car.police) continue;
-    const d = distance(x, y, car.x, car.y);
-    if (d < bestDist) {
-      bestDist = d;
-      best = car;
+let nextCarId = 1;
+
+export function createCar(kind, x, y, angle, rng) {
+  const spec = CAR_CLASSES[kind] || CAR_CLASSES.sedan;
+  return {
+    id: nextCarId++, kind, spec,
+    x, y, angle: angle || 0, speed: 0,
+    color: rng ? rng.pick(spec.colors) : spec.colors[0],
+    health: 100, driver: null, parked: false, police: kind === 'police' || kind === 'interceptor',
+    lightPhase: Math.random() * 6.28, skid: 0, doorOpen: 0, dead: false,
+  };
+}
+
+export function carRect(car) {
+  const hw = car.spec.length / 2; const hh = car.spec.width / 2;
+  return { x: car.x - hw, y: car.y - hh, w: car.spec.length, h: car.spec.width };
+}
+
+/** Advance one car under throttle/steer input; returns true if it struck a building. */
+export function driveCar(car, dt, throttle, steer, buildings) {
+  const spec = car.spec;
+  if (throttle > 0) car.speed += spec.accel * throttle * dt;
+  else if (throttle < 0) car.speed += (car.speed > 4 ? -340 : spec.accel * 0.55 * throttle) * dt;
+  car.speed -= car.speed * 0.55 * dt;
+  if (throttle === 0) car.speed -= Math.sign(car.speed) * Math.min(Math.abs(car.speed), 26 * dt);
+  car.speed = clamp(car.speed, -spec.topSpeed * 0.38, spec.topSpeed);
+  const steerAuthority = clamp(Math.abs(car.speed) / 60, 0, 1) * Math.sign(car.speed);
+  car.angle += steer * spec.grip * 0.62 * steerAuthority * dt;
+  const nx = car.x + Math.cos(car.angle) * car.speed * dt;
+  const ny = car.y + Math.sin(car.angle) * car.speed * dt;
+  car.skid = Math.abs(steer) > 0.6 && Math.abs(car.speed) > 190 ? 1 : Math.max(0, car.skid - dt * 3);
+  const probe = { x: nx - spec.length / 2, y: ny - spec.width / 2, w: spec.length, h: spec.width };
+  for (const b of buildings) {
+    if (rectsOverlap(probe, b)) {
+      car.speed *= -0.25;
+      return true;
     }
   }
-  return best;
+  car.x = nx; car.y = ny;
+  return false;
 }
 
-/** Climb into a car. A witnessed theft puts a star on the player. */
-export function enterCar(game, car) {
-  if (!car || car.police) return;
-  const stolen = car.traffic || car.parked;
-  car.traffic = false;
-  car.parked = false;
-  car.driver = 'player';
-  car.speed = 0;
-  game.player.inCar = car;
-  game.player.x = car.x;
-  game.player.y = car.y;
-  game.player.angle = car.angle;
-  if (stolen) {
-    game.stats.carsStolen += 1;
-    if (witnessNear(game, car.x, car.y, WANTED.witnessRange)) {
-      addWanted(game, 1);
-      setToast(game, 'Car stolen — someone saw you! The police are coming.');
-    } else {
-      setToast(game, 'Car stolen. Nobody saw a thing.');
-    }
-  }
-}
-
-/** Step out beside the car. */
-export function exitCar(game) {
-  const car = game.player.inCar;
-  if (!car) return;
-  const side = car.angle + Math.PI / 2;
-  game.player.x = car.x + Math.cos(side) * 34;
-  game.player.y = car.y + Math.sin(side) * 34;
-  resolveCircleVsCity(game.city, game.player, PLAYER.radius);
-  game.player.angle = car.angle;
-  car.parked = true;
-  car.speed = 0;
-  car.driver = null;
-  game.player.inCar = null;
-}
-
-function driveCar(game, car, input, dt) {
-  const axes = input.axes();
-  const forward = Math.cos(car.angle);
-  const right = Math.sin(car.angle);
-  if (axes.y < 0) car.speed += CAR.accel * dt;
-  else if (axes.y > 0) {
-    car.speed -= (car.speed > 10 ? CAR.brake : CAR.accel * 0.6) * dt;
+export function drawCar(ctx, car, time) {
+  const spec = car.spec;
+  ctx.save();
+  ctx.translate(car.x, car.y);
+  ctx.rotate(car.angle);
+  const L = spec.length; const W = spec.width;
+  // Shadow, then headlight glow spilling ahead at night.
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.fillRect(-L / 2 + 3, -W / 2 + 4, L, W);
+  const glow = ctx.createRadialGradient(L / 2, 0, 4, L / 2 + 46, 0, 74);
+  glow.addColorStop(0, 'rgba(255,244,180,0.30)');
+  glow.addColorStop(1, 'rgba(255,244,180,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(L / 2 - 6, -34, 96, 68);
+  // Body and class silhouette.
+  ctx.fillStyle = car.color;
+  ctx.beginPath();
+  ctx.roundRect(-L / 2, -W / 2, L, W, 6);
+  ctx.fill();
+  if (car.kind === 'truck') {
+    ctx.fillStyle = 'rgba(20,24,38,0.85)';
+    ctx.fillRect(-L / 2 + 4, -W / 2 + 3, 16, W - 6);
+    ctx.fillStyle = car.color === '#7f8c8d' ? '#aeb6bf' : car.color;
+    ctx.fillRect(-L / 2 + 24, -W / 2 + 2, L - 28, W - 4);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.strokeRect(-L / 2 + 24, -W / 2 + 2, L - 28, W - 4);
   } else {
-    // Rolling resistance: ease toward a stop.
-    car.speed -= Math.sign(car.speed) * Math.min(Math.abs(car.speed), 220 * dt);
+    ctx.fillStyle = 'rgba(16,22,40,0.92)';
+    ctx.beginPath();
+    ctx.roundRect(-L * 0.16, -W / 2 + 3, L * 0.36, W - 6, 4);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(140,200,255,0.5)';
+    ctx.fillRect(L * 0.13, -W / 2 + 4, 4, W - 8);
   }
-  car.speed = Math.max(-CAR.reverseMax, Math.min(CAR.maxSpeed, car.speed));
-  const grip = Math.min(1, Math.abs(car.speed) / 220);
-  car.angle += axes.x * CAR.turnRate * grip * dt * Math.sign(car.speed || 1);
-
-  const stepX = Math.cos(car.angle) * car.speed * dt;
-  const stepY = Math.sin(car.angle) * car.speed * dt;
-  car.x += stepX;
-  car.y += stepY;
-  const crashed = resolveCircleVsCity(game.city, car, CAR.radius);
-  if (crashed && Math.abs(car.speed) > 140) {
-    game.fx.sparks(car.x - Math.cos(car.angle) * 20, car.y - Math.sin(car.angle) * 20);
-    game.fx.addShake(7);
-    car.speed *= -0.25;
-  } else if (crashed) {
-    car.speed *= 0.4;
+  if (car.kind === 'taxi') {
+    ctx.fillStyle = '#11131c';
+    ctx.fillRect(-8, -7, 16, 14);
+    ctx.fillStyle = '#ffd23e';
+    ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('TAXI', 0, 0);
   }
-
-  // Bumping other cars: shove them and slow down.
-  for (const other of game.cars) {
-    if (other === car) continue;
-    const d = distance(car.x, car.y, other.x, other.y);
-    if (d >= 46 || d <= 0.01) continue;
-    const push = (46 - d) / 2;
-    const nx = (other.x - car.x) / d;
-    const ny = (other.y - car.y) / d;
-    other.x += nx * push;
-    other.y += ny * push;
-    if (Math.abs(car.speed) > 120) {
-      game.fx.sparks((car.x + other.x) / 2, (car.y + other.y) / 2);
-      game.fx.addShake(4);
-    }
-    car.speed *= 0.82;
-    if (other.traffic) other.speed *= 0.7;
+  if (car.police) {
+    ctx.fillStyle = car.kind === 'interceptor' ? '#f4f6f7' : '#1b2735';
+    ctx.fillRect(-L * 0.2, -W / 2 + 2, L * 0.42, W - 4);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('POLICE', 0, 0);
+    drawLightBar(ctx, car, time, W);
   }
-
-  // Running a pedestrian over is a serious crime when anyone sees it.
-  for (const ped of game.peds) {
-    if (ped.state === 'dead') continue;
-    if (distance(car.x, car.y, ped.x, ped.y) > 30) continue;
-    if (Math.abs(car.speed) < 60) continue;
-    ped.state = 'dead';
-    ped.deadTimer = 6;
-    game.fx.burst(ped.x, ped.y, '#e05a5a', 12, 200, 0.6, 3);
-    game.fx.addShake(5);
-    scatterPeds(game, ped.x, ped.y, 320);
-    if (witnessNear(game, ped.x, ped.y, WANTED.witnessRange)) {
-      addWanted(game, 2);
-      setToast(game, 'You ran someone over — the police are coming!');
-    }
-  }
-
-  // Hard cornering at speed leaves rubber on the road.
-  if (Math.abs(axes.x) > 0.6 && Math.abs(car.speed) > 260 && game.rng() < 0.6) {
-    game.fx.addSkid(car.x - forward * 18, car.y - right * 18, car.angle);
-  }
-
-  game.player.x = car.x;
-  game.player.y = car.y;
-  game.player.angle = car.angle;
-  game.player.speed = car.speed;
+  // Wheels.
+  ctx.fillStyle = '#0b0d14';
+  for (const [wx, wy] of [[-L / 2 + 8, -W / 2 - 2], [L / 2 - 10, -W / 2 - 2], [-L / 2 + 8, W / 2 - 3], [L / 2 - 10, W / 2 - 3]]) ctx.fillRect(wx, wy, 9, 5);
+  // Damage smoke tint.
+  if (car.health < 45) { ctx.fillStyle = 'rgba(30,30,36,0.35)'; ctx.fillRect(L / 2 - 14, -W / 2 + 3, 12, W - 6); }
+  ctx.restore();
 }
 
-function walkPlayer(game, input, dt) {
-  const player = game.player;
-  const axes = input.axes();
-  const length = Math.hypot(axes.x, axes.y);
-  player.moving = length > 0;
-  if (!player.moving) return;
-  const speed = input.running() ? PLAYER.runSpeed : PLAYER.walkSpeed;
-  const nx = axes.x / length;
-  const ny = axes.y / length;
-  const targetAngle = Math.atan2(ny, nx);
-  player.angle = turnToward(player.angle, targetAngle, dt * 12);
-  player.x += nx * speed * dt;
-  player.y += ny * speed * dt;
-  resolveCircleVsCity(game.city, player, PLAYER.radius);
-  player.speed = speed;
-}
-
-/** Advance the player one step, on foot or in a car. */
-export function stepPlayer(game, input, dt) {
-  const player = game.player;
-  if (player.inCar) {
-    driveCar(game, player.inCar, input, dt);
-    if (input.takePressed('enter')) exitCar(game);
-    return;
-  }
-  walkPlayer(game, input, dt);
-  if (input.takePressed('enter')) {
-    const car = nearestCar(game, player.x, player.y, CAR.enterRange);
-    if (car) enterCar(game, car);
-    else setToast(game, 'No car close enough — walk up to one and press E.');
-  }
+function drawLightBar(ctx, car, time, W) {
+  const phase = Math.floor((time * 6 + car.lightPhase)) % 2;
+  const redOn = phase === 0;
+  ctx.save();
+  ctx.shadowBlur = 16;
+  ctx.shadowColor = redOn ? '#ff2e4d' : '#2e7bff';
+  ctx.fillStyle = redOn ? '#ff2e4d' : '#571b26';
+  ctx.fillRect(-9, -W / 2 - 1, 8, 6);
+  ctx.fillStyle = !redOn ? '#2e7bff' : '#1b2a57';
+  ctx.fillRect(1, -W / 2 - 1, 8, 6);
+  ctx.restore();
+  const halo = ctx.createRadialGradient(0, 0, 2, 0, 0, 42);
+  halo.addColorStop(0, redOn ? 'rgba(255,46,77,0.35)' : 'rgba(46,123,255,0.35)');
+  halo.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(-44, -44, 88, 88);
 }

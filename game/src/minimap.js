@@ -1,111 +1,64 @@
-// The live minimap: the whole city shrunk into the bottom-right corner, with
-// blips for the player, the mission target, the police, the taxi fare and the
-// packages still to find. The player is a white arrow; everything else is a
-// coloured dot the player learns to read at a glance.
+// Vice Harbor — the live minimap: a scaled plan of the whole city (roads, beach
+// and water) with blips for Rio, the objective, police (flashing), Mara, taxi
+// fares and unfound packages, plus a north marker and district tint.
 
-import { PALETTE, VIEW, WORLD } from './config.js';
+import { AVENUES, STREETS, WATER_X, WORLD } from './config.js';
+import { objectiveTarget } from './missions.js';
 
-const MAP = { x: VIEW.width - 244, y: VIEW.height - 178, w: 230, h: 164 };
+const MAP_W = 196;
+const MAP_H = 150;
+const MAP_X = 1280 - MAP_W - 16;
+const MAP_Y = 720 - MAP_H - 16;
 
-/** Where a world point lands on the minimap. */
-export function minimapPoint(x, y) {
-  return {
-    x: MAP.x + (x / WORLD.width) * MAP.w,
-    y: MAP.y + (y / WORLD.height) * MAP.h,
-  };
+export function minimapRect() { return { x: MAP_X, y: MAP_Y, w: MAP_W, h: MAP_H }; }
+
+function toMap(x, y) {
+  return { x: MAP_X + (x / WORLD.width) * MAP_W, y: MAP_Y + (y / WORLD.height) * MAP_H };
 }
 
-/** Draw the minimap in the bottom-right corner of the view. */
-export function drawMinimap(ctx, game) {
-  const { city } = game;
+function blip(ctx, x, y, color, size) {
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(x, y, size, 0, 6.29); ctx.fill();
+}
+
+export function drawMinimap(ctx, G, time) {
   ctx.save();
-  ctx.fillStyle = 'rgba(8, 10, 22, 0.78)';
-  ctx.fillRect(MAP.x - 6, MAP.y - 6, MAP.w + 12, MAP.h + 12);
-  ctx.strokeStyle = PALETTE.panelEdge;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(MAP.x - 6, MAP.y - 6, MAP.w + 12, MAP.h + 12);
-
-  // Water and sand on the east edge.
-  const sand = minimapPoint(city.sandX, 0);
-  const water = minimapPoint(city.waterX, 0);
-  ctx.fillStyle = PALETTE.sandDark;
-  ctx.fillRect(sand.x, MAP.y, MAP.w - (sand.x - MAP.x), MAP.h);
-  ctx.fillStyle = PALETTE.water;
-  ctx.fillRect(water.x, MAP.y, MAP.w - (water.x - MAP.x), MAP.h);
-
+  ctx.fillStyle = 'rgba(7,12,26,0.88)';
+  ctx.beginPath(); ctx.roundRect(MAP_X - 3, MAP_Y - 3, MAP_W + 6, MAP_H + 6, 8); ctx.fill();
+  ctx.fillStyle = '#182238';
+  ctx.fillRect(MAP_X, MAP_Y, MAP_W, MAP_H);
+  // Water and beach on the east edge.
+  const wx = MAP_X + (WATER_X / WORLD.width) * MAP_W;
+  ctx.fillStyle = '#0d3550';
+  ctx.fillRect(wx, MAP_Y, MAP_X + MAP_W - wx, MAP_H);
+  ctx.fillStyle = '#c9a86a';
+  ctx.fillRect(wx - 4, MAP_Y, 4, MAP_H);
   // Roads.
-  ctx.fillStyle = '#3a3f58';
-  for (const road of city.roadsV) {
-    const p = minimapPoint(road, 0);
-    ctx.fillRect(p.x - 2, MAP.y, 4, MAP.h);
-  }
-  for (const road of city.roadsH) {
-    const p = minimapPoint(0, road);
-    ctx.fillRect(MAP.x, p.y - 2, MAP.w, 4);
-  }
-
-  // Packages still to find.
-  ctx.fillStyle = PALETTE.package;
-  for (const pack of game.packages) {
-    if (pack.taken) continue;
-    const p = minimapPoint(pack.x, pack.y);
-    ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
-  }
-
-  // The taxi fare, when one is waiting.
-  if (game.taxi.state !== 'idle') {
-    const target = game.taxi.state === 'pickup' ? game.taxi.pickup : game.taxi.dest;
-    if (target) {
-      const p = minimapPoint(target.x, target.y);
-      ctx.fillStyle = '#4fd0ff';
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  // The mission target.
-  if (game.mission.target) {
-    const p = minimapPoint(game.mission.target.x, game.mission.target.y);
-    ctx.fillStyle = PALETTE.marker;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#11141b';
-    ctx.font = 'bold 9px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('!', p.x, p.y + 3);
-  }
-
-  // Police cars, flashing.
-  const blink = Math.floor(game.time * 4) % 2 === 0;
-  ctx.fillStyle = blink ? '#ff3b30' : '#2f6df6';
-  for (const car of game.cars) {
-    if (!car.police) continue;
-    const p = minimapPoint(car.x, car.y);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // The player: a white arrow pointing the way they face.
-  const player = game.player;
-  const p = minimapPoint(player.x, player.y);
-  ctx.save();
-  ctx.translate(p.x, p.y);
-  ctx.rotate(player.angle);
-  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#5a6280'; ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(8, 0);
-  ctx.lineTo(-6, -5);
-  ctx.lineTo(-6, 5);
-  ctx.closePath();
-  ctx.fill();
+  for (const ax of AVENUES) { const p = toMap(ax, 0); ctx.moveTo(p.x, MAP_Y); ctx.lineTo(p.x, MAP_Y + MAP_H); }
+  for (const sy of STREETS) { const p = toMap(0, sy); ctx.moveTo(MAP_X, p.y); ctx.lineTo(MAP_X + MAP_W, p.y); }
+  ctx.stroke();
+  // Unfound packages as faint gold dots.
+  for (const pack of G.packages) if (!pack.taken) { const p = toMap(pack.x, pack.y); blip(ctx, p.x, p.y, 'rgba(255,210,62,0.75)', 1.8); }
+  // Police blips flash red/blue with the light bars.
+  const flash = Math.floor(time * 5) % 2 === 0;
+  for (const car of G.cars) if (car.police && !car.dead) { const p = toMap(car.x, car.y); blip(ctx, p.x, p.y, flash ? '#ff2e4d' : '#2e7bff', 3); }
+  // Mara / objective / taxi blips.
+  if (G.mara) { const p = toMap(G.mara.x, G.mara.y); blip(ctx, p.x, p.y, '#ffd23e', 3.4); }
+  const target = objectiveTarget(G);
+  if (target) { const p = toMap(target.x, target.y); ctx.strokeStyle = '#ffd23e'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(p.x, p.y, 6 + Math.sin(time * 4) * 1.4, 0, 6.29); ctx.stroke(); }
+  if (G.taxi) { const p = toMap(G.taxi.target.x, G.taxi.target.y); blip(ctx, p.x, p.y, '#ff6bde', 3.4); }
+  // Player arrow.
+  const pp = toMap(G.player.x, G.player.y);
+  ctx.save();
+  ctx.translate(pp.x, pp.y);
+  ctx.rotate(G.player.car ? G.player.car.angle : G.player.angle);
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.moveTo(6, 0); ctx.lineTo(-4, -3.6); ctx.lineTo(-4, 3.6); ctx.closePath(); ctx.fill();
   ctx.restore();
-
-  ctx.fillStyle = PALETTE.hudMuted;
-  ctx.font = '11px system-ui, sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText('VICE HARBOR', MAP.x, MAP.y - 10);
+  ctx.fillStyle = '#f2f5ff';
+  ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'right';
+  ctx.fillText('N', MAP_X + MAP_W - 4, MAP_Y + 11);
   ctx.restore();
 }

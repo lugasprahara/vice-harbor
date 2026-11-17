@@ -1,116 +1,71 @@
-// Vice Harbor — every tuning number, colour and size in one place.
-// The camera shows a fixed 1280x720 logical window into a much larger city;
-// the renderer scales that window to the browser, so no rule below depends
-// on the screen size.
+// Vice Harbor — every tuning number, colour and catalogue in one place.
+// The view is a fixed 1280x720 logical frame; the world is a much larger coastal
+// city the camera roams over. Nothing below depends on the real window size.
 
 export const VIEW = { width: 1280, height: 720 };
-
-/** The whole city, in world units. The beach and the water sit on the east edge. */
-export const WORLD = { width: 3200, height: 2400 };
-
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
 export const STEP = 1 / 60;
+export const WORLD = { width: 3400, height: 2600 };
 
-/** Where the save lives between visits (this browser only). */
-export const SAVE_KEY = 'vice-harbor.save.v1';
+/** Avenues run north-south, streets east-west; blocks sit in the gaps between them. */
+export const AVENUES = [240, 640, 1040, 1440, 1840, 2240, 2640];
+export const STREETS = [240, 640, 1040, 1440, 1840, 2240];
+export const ROAD_WIDTH = 128;
+export const WATER_X = 2920;
 
 export const PLAYER = {
-  radius: 14,
-  walkSpeed: 175,
-  runSpeed: 330,
+  radius: 11,
+  walkSpeed: 148,
+  runSpeed: 252,
   maxHealth: 100,
+  punchRange: 34,
   punchDamage: 34,
-  punchRange: 46,
 };
 
-export const PISTOL = {
-  damage: 50,
-  range: 460,
-  startAmmo: 24,
-  pickupAmmo: 12,
+export const WEAPONS = {
+  fists: { name: 'Fists', damage: 0, range: 34, cooldown: 0.32, spread: 0, speed: 0, auto: false },
+  pistol: { name: 'Pistol', damage: 34, range: 460, cooldown: 0.26, spread: 0.02, speed: 780, auto: false },
+  smg: { name: 'SMG', damage: 22, range: 420, cooldown: 0.09, spread: 0.07, speed: 820, auto: true },
 };
 
-export const CAR = {
-  accel: 430,
-  brake: 760,
-  maxSpeed: 540,
-  reverseMax: 170,
-  turnRate: 2.7,
-  radius: 16,
-  enterRange: 52,
+export const CAR_CLASSES = {
+  compact: { name: 'Compact', length: 44, width: 22, topSpeed: 300, accel: 210, grip: 3.4, colors: ['#e74c3c', '#f39c12', '#2ecc71', '#9b59b6'] },
+  sedan: { name: 'Sedan', length: 52, width: 24, topSpeed: 340, accel: 230, grip: 3.1, colors: ['#ecf0f1', '#34495e', '#16a085', '#c0392b'] },
+  taxi: { name: 'Taxi', length: 52, width: 24, topSpeed: 330, accel: 225, grip: 3.1, colors: ['#f7c948'] },
+  truck: { name: 'Truck', length: 66, width: 28, topSpeed: 265, accel: 165, grip: 2.5, colors: ['#7f8c8d', '#d35400', '#2980b9'] },
+  police: { name: 'Patrol', length: 52, width: 24, topSpeed: 372, accel: 265, grip: 3.4, colors: ['#f4f6f7'] },
+  interceptor: { name: 'Interceptor', length: 54, width: 24, topSpeed: 430, accel: 310, grip: 3.7, colors: ['#212f3c'] },
 };
 
-export const TRAFFIC = {
-  cruiseMin: 130,
-  cruiseMax: 185,
-  count: 14,
-  parkedCount: 12,
+export const RADIO_STATIONS = [
+  { id: 'neonwave', name: 'NEONWAVE 98.1', wave: 'sawtooth', base: 110, tempo: 0.42, notes: [0, 3, 5, 7, 10, 7, 5, 3] },
+  { id: 'palmdrive', name: 'PALM DRIVE FM', wave: 'triangle', base: 130.81, tempo: 0.55, notes: [0, 4, 7, 11, 12, 11, 7, 4] },
+  { id: 'harborbass', name: 'HARBOR BASS 104', wave: 'square', base: 82.41, tempo: 0.31, notes: [0, 0, 7, 0, 5, 0, 10, 7] },
+];
+
+export const DISTRICTS = {
+  downtown: { label: 'DOWNTOWN', sign: '#ff2e88', trim: '#22d3ee' },
+  marina: { label: 'MARINA BOARDWALK', sign: '#ffb340', trim: '#2ee6a8' },
+  industrial: { label: 'INDUSTRIAL DOCKS', sign: '#ff7847', trim: '#ffd23e' },
+  residential: { label: 'PALM RESIDENTIAL', sign: '#7ee787', trim: '#ffa8d2' },
 };
-
-export const PEDS = { count: 26, walkMin: 42, walkMax: 78, fleeSpeed: 210 };
-
-export const POLICE = { chaseSpeed: 560, ramDamage: 9, bustRange: 36, maxCars: 3 };
-
-export const WANTED = { decaySeconds: 7, witnessRange: 300 };
-
-export const MISSION_REWARDS = [100, 200, 300, 400, 1000];
-
-export const PACKAGE_COUNT = 10;
-export const PACKAGE_CASH = 25;
-export const PACKAGE_BONUS = 250;
-
-export const TAXI = { fareMin: 50, fareMax: 150, pickupRange: 56, cooldown: 12 };
-
-/** The road grid: roads run through these centres, 96 units wide, every 400 units. */
-export const ROAD_WIDTH = 96;
-export const ROAD_GAP = 400;
 
 export const PALETTE = {
-  backdrop: '#0b0e1a',
-  block: '#181b2e',
-  blockAlt: '#1d2138',
-  sidewalk: '#2b2f47',
-  road: '#20242f',
-  roadLine: '#c9a227',
-  roadEdge: '#3a3f58',
+  night: '#0a0f22',
+  asphalt: '#232838',
+  asphaltEdge: '#39405a',
+  lane: '#e8d44d',
+  sidewalk: '#4a4f66',
   sand: '#c9a86a',
-  sandDark: '#b08d4f',
-  water: '#0e4d6b',
-  waterDeep: '#0a3a55',
-  grass: '#1d3a24',
-  palmTrunk: '#6b4a2f',
-  palmLeaf: '#2fae5f',
-  lightPole: '#565c74',
-  lightGlow: '#ffd97a',
-  player: '#35e0c8',
-  playerDark: '#0f8a7c',
-  pedSkin: '#e8b98a',
-  policeWhite: '#e8ecf4',
-  policeBlue: '#2f6df6',
-  policeLight: '#ff3b30',
-  package: '#39ff88',
-  taxi: '#ffd23f',
-  marker: '#ffd23f',
-  markerRed: '#ff4d6d',
-  hudPanel: 'rgba(8, 10, 22, 0.72)',
-  hudText: '#eef1f5',
-  hudMuted: '#9aa1b5',
-  hudMoney: '#7dff9e',
-  hudHealth: '#ff5d73',
-  hudHealthBack: '#3a2030',
-  panel: 'rgba(10, 12, 26, 0.88)',
-  panelEdge: '#35e0c8',
-  titleA: '#ff5da2',
-  titleB: '#35e0c8',
-  dialogueBox: 'rgba(8, 10, 24, 0.9)',
-  star: '#ffd23f',
-  starEmpty: '#4a4f66',
+  water: '#0d3550',
+  waterGlow: '#14607e',
+  grass: '#1d4634',
+  text: '#f2f5ff',
+  muted: '#9aa5c4',
+  money: '#5df08a',
+  danger: '#ff4757',
+  gold: '#ffd23e',
+  panel: 'rgba(8,12,28,0.82)',
 };
 
-export const BUILDING_COLORS = ['#2a2f4a', '#33284a', '#27384a', '#3a2a3d', '#2d3a2a', '#402a2a'];
-export const ROOF_COLORS = ['#3d4266', '#4a3560', '#35465e', '#52384a', '#3d4a35', '#543838'];
-export const NEON_COLORS = ['#ff5da2', '#35e0c8', '#ffd23f', '#7dff9e', '#b78cff', '#ff8a3d'];
-export const CAR_COLORS = ['#d64545', '#3f7fd6', '#e8b93c', '#7a4fd0', '#3fae6a', '#d6d6e0', '#e07a2e', '#4fd0c8'];
-export const PED_SHIRTS = ['#e05a5a', '#5a8de0', '#e0c95a', '#7ad05a', '#b05ad0', '#e08a5a', '#5ad0c0', '#d0d0d0'];
-
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+export const SAVE_KEY = 'vice-harbor.save.v2';
+export const FONT = '"Segoe UI", system-ui, -apple-system, sans-serif';

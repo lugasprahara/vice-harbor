@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/gta6-01/lugasprahara/vice-harbor/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 [![reward](https://make.fun/badge/gta6-01/lugasprahara/vice-harbor/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
-Vice Harbor is an original top-down 2D open-world crime game set in a neon coastal city. Play as Rio Vega: explore on foot and by car, steal cars, dodge traffic and pedestrians, outrun police chases at five wanted stars, fight with fists and a pistol, run taxi fares, hunt hidden packages, and work through a five-mission story for fixer Mara — all with a live minimap, HUD, save game, synth sound and an original music loop.
+Vice Harbor is an original top-down 2D open-world crime game set in a neon coastal city, where fixer Rio Vega works jobs for Mara across four districts — downtown, the marina boardwalk, the industrial docks and the residential palms. It packs an 8-mission story campaign with dialogue, two multi-stage heists with timed loot grabs and 5-star getaways, police chases with interceptors and roadblocks, a 3-station WebAudio synth radio, repeatable taxi fares, 14 hidden packages, stealable traffic, crowds that flee gunfire, and a full save game. Everything runs from static files in vanilla JS and canvas: no libraries, no build step, no network requests.
 
 ## Run it
 

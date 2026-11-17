@@ -1,116 +1,115 @@
-// Combat: fists and the pistol. F is a punch at close range; a mouse click
-// fires the pistol toward the cursor, with a ray that stops at the first
-// building. Hurting people in front of witnesses raises the wanted level,
-// and every shot rings out across the street.
+// Vice Harbor — combat: fists, the pistol and the SMG. Mouse aims, bullets are
+// fast tracers with spread, hits flash and knock health off pedestrians, drivers
+// and police cars; every shot scares the crowd and, when witnessed, feeds the
+// wanted system. Melee is a short-range arc in the aim direction.
 
-import { PISTOL, PLAYER, WANTED } from './config.js';
-import { angleDifference, distance, pointInBuilding } from './geo.js';
-import { scatterPeds } from './pedestrians.js';
-import { addWanted, witnessNear } from './police.js';
-import { setToast } from './world.js';
+import { PLAYER, WEAPONS } from './config.js';
+import { distance } from './geo.js';
+import { reportCrime } from './police.js';
+import { scarePeds } from './pedestrians.js';
 
-/** How far a ray from (x, y) along `angle` travels before a building stops it. */
-function rayToBuilding(game, x, y, angle, maxRange) {
-  for (let d = 12; d <= maxRange; d += 12) {
-    if (pointInBuilding(game.city, x + Math.cos(angle) * d, y + Math.sin(angle) * d)) return d;
+export function createBullets() { return []; }
+
+export function tryPlayerAttack(G, dt) {
+  const p = G.player;
+  p.fireCooldown -= dt;
+  const weapon = WEAPONS[p.weapon];
+  const wantFire = p.weapon === 'fists' ? G.input.mouseDown : (weapon.auto ? G.input.mouseDown : G.input.mousePressed);
+  if (!wantFire || p.fireCooldown > 0 || p.car) return;
+  if (p.weapon !== 'fists' && p.ammo[p.weapon] <= 0) { p.fireCooldown = 0.3; G.hudFlash = 'NO AMMO — FISTS'; G.hudFlashTimer = 0.9; return; }
+  p.fireCooldown = weapon.cooldown;
+  p.aimAngle = Math.atan2(G.input.mouseY - 360, G.input.mouseX - 640);
+  if (p.weapon === 'fists') {
+    G.audio.playPunch();
+    G.effects.burst(p.x + Math.cos(p.aimAngle) * 20, p.y + Math.sin(p.aimAngle) * 20, 3, '#ffffff', 60);
+    meleeHit(G, p.aimAngle);
+    return;
   }
-  return maxRange;
+  p.ammo[p.weapon] -= 1;
+  if (p.weapon === 'smg') G.audio.playSmgShot(); else G.audio.playGunshot();
+  G.effects.addShake(p.weapon === 'smg' ? 1.1 : 2);
+  const spread = (G.rng.next() - 0.5) * 2 * weapon.spread;
+  const angle = p.aimAngle + spread;
+  G.bullets.push({
+    x: p.x + Math.cos(p.aimAngle) * 16, y: p.y + Math.sin(p.aimAngle) * 16,
+    vx: Math.cos(angle) * weapon.speed, vy: Math.sin(angle) * weapon.speed,
+    life: weapon.range / weapon.speed, damage: weapon.damage, friendly: true,
+  });
+  G.muzzle = { x: p.x + Math.cos(p.aimAngle) * 22, y: p.y + Math.sin(p.aimAngle) * 22, life: 0.05 };
+  scarePeds(G, p.x, p.y, 300);
+  reportCrime(G, p.x, p.y, 1);
 }
 
-function hurtPed(game, ped, damage, causeX, causeY) {
-  ped.health = (ped.health ?? 100) - damage;
-  ped.state = 'flee';
-  ped.fleeX = causeX;
-  ped.fleeY = causeY;
-  ped.fleeTimer = 2.5;
-  // Knock them away from the blow.
-  const away = Math.atan2(ped.y - causeY, ped.x - causeX);
-  ped.x += Math.cos(away) * 14;
-  ped.y += Math.sin(away) * 14;
-  game.fx.burst(ped.x, ped.y, '#e05a5a', 8, 160, 0.5, 3);
-  if (ped.health <= 0) {
-    ped.state = 'dead';
-    ped.deadTimer = 6;
-    scatterPeds(game, ped.x, ped.y, 320);
-  }
-  return ped.state === 'dead';
-}
-
-/** Advance combat one step: weapon switching, punches and pistol shots. */
-export function stepCombat(game, input, dt) {
-  const player = game.player;
-  if (input.takePressed('weapon1')) player.weapon = 0;
-  if (input.takePressed('weapon2')) player.weapon = 1;
-  if (player.inCar) return;
-
-  if (input.takePressed('punch')) {
-    const reach = PLAYER.punchRange;
-    let best = null;
-    let bestDist = reach;
-    for (const ped of game.peds) {
-      if (ped.state === 'dead') continue;
-      const d = distance(player.x, player.y, ped.x, ped.y);
-      if (d >= bestDist) continue;
-      const facing = Math.abs(angleDifference(player.angle, Math.atan2(ped.y - player.y, ped.x - player.x)));
-      if (facing > 1.1) continue;
-      best = ped;
-      bestDist = d;
+function meleeHit(G, angle) {
+  const p = G.player;
+  for (const ped of G.peds) {
+    if (ped.dead || ped.mara) continue;
+    const d = distance(p.x, p.y, ped.x, ped.y);
+    const a = Math.atan2(ped.y - p.y, ped.x - p.x);
+    if (d < PLAYER.punchRange && Math.abs(((a - angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI) < 1.1) {
+      damagePedestrian(G, ped, PLAYER.punchDamage);
+      reportCrime(G, p.x, p.y, 1);
+      return;
     }
-    game.audio.punch();
-    if (best) {
-      const killed = hurtPed(game, best, PLAYER.punchDamage, player.x, player.y);
-      game.fx.addShake(3);
-      if (witnessNear(game, player.x, player.y, WANTED.witnessRange)) {
-        addWanted(game, killed ? 2 : 1);
-        setToast(game, killed ? 'You beat someone down — the police are coming!' : 'Assault! Someone called the police.');
+  }
+  for (const car of G.cars) {
+    if (distance(p.x, p.y, car.x, car.y) < 44) { car.health -= 6; G.effects.burst(car.x, car.y, 4, '#ffd23e', 90); }
+  }
+}
+
+export function damagePedestrian(G, ped, damage) {
+  ped.health -= damage;
+  ped.panic = 3;
+  ped.fleeFrom = { x: G.player.x, y: G.player.y };
+  G.effects.burst(ped.x, ped.y, 6, '#ff4757', 110);
+  if (ped.health <= 0 && !ped.dead) {
+    ped.dead = true;
+    G.player.money += 12;
+    G.hudFlash = '+$12';
+    G.hudFlashTimer = 0.8;
+    reportCrime(G, ped.x, ped.y, 1);
+  }
+}
+
+export function updateBullets(G, dt) {
+  for (let i = G.bullets.length - 1; i >= 0; i -= 1) {
+    const b = G.bullets[i];
+    b.life -= dt;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    let hit = b.life <= 0;
+    for (const bld of G.world.buildings) {
+      if (b.x > bld.x && b.x < bld.x + bld.w && b.y > bld.y && b.y < bld.y + bld.h) { hit = true; G.effects.burst(b.x, b.y, 3, '#ffeaa7', 70); break; }
+    }
+    if (!hit && b.friendly) {
+      for (const ped of G.peds) {
+        if (!ped.dead && !ped.mara && distance(b.x, b.y, ped.x, ped.y) < 11) { damagePedestrian(G, ped, b.damage); hit = true; break; }
+      }
+      if (!hit) for (const car of G.cars) {
+        if (!car.dead && distance(b.x, b.y, car.x, car.y) < car.spec.width) {
+          car.health -= b.damage;
+          G.effects.burst(b.x, b.y, 5, '#ffd23e', 120);
+          if (car.police) reportCrime(G, car.x, car.y, 1);
+          if (car.health <= 0) { car.dead = true; G.effects.burst(car.x, car.y, 24, '#ff7847'); G.effects.smoke(car.x, car.y, 6); G.audio.playCrash(); }
+          hit = true; break;
+        }
       }
     }
-    return;
+    if (hit) G.bullets.splice(i, 1);
   }
+  if (G.muzzle) { G.muzzle.life -= dt; if (G.muzzle.life <= 0) G.muzzle = null; }
+}
 
-  if (!input.takeClick()) return;
-  if (player.weapon !== 1) {
-    // Fists only: a click without the pistol is a swing at the air.
-    game.audio.punch();
-    return;
-  }
-  if (player.ammo <= 0) {
-    setToast(game, 'Out of ammo — find a green ammo crate.');
-    game.audio.click();
-    return;
-  }
-  player.ammo -= 1;
-  const angle = Math.atan2(game.mouseWorld.y - player.y, game.mouseWorld.x - player.x);
-  player.angle = angle;
-  game.audio.gunshot();
-  game.fx.muzzle(player.x, player.y, angle);
-  game.fx.addShake(2);
-  const range = rayToBuilding(game, player.x, player.y, angle, PISTOL.range);
-  // A tracer of sparks along the bullet's path.
-  for (let d = 30; d < range; d += 60) {
-    game.fx.burst(player.x + Math.cos(angle) * d, player.y + Math.sin(angle) * d, '#ffe9a8', 1, 20, 0.12, 2);
-  }
-  let hit = null;
-  let hitDist = range;
-  for (const ped of game.peds) {
-    if (ped.state === 'dead') continue;
-    const dx = ped.x - player.x;
-    const dy = ped.y - player.y;
-    const along = dx * Math.cos(angle) + dy * Math.sin(angle);
-    if (along < 10 || along > hitDist) continue;
-    const side = Math.abs(-dx * Math.sin(angle) + dy * Math.cos(angle));
-    if (side > 26) continue;
-    hit = ped;
-    hitDist = along;
-  }
-  scatterPeds(game, player.x, player.y, 380);
-  if (hit) {
-    const killed = hurtPed(game, hit, PISTOL.damage, player.x, player.y);
-    if (witnessNear(game, player.x, player.y, WANTED.witnessRange)) {
-      addWanted(game, killed ? 2 : 1);
-    }
-  } else if (witnessNear(game, player.x, player.y, WANTED.witnessRange)) {
-    addWanted(game, 1);
-    setToast(game, 'Shots fired — someone called the police!');
+export function drawBullets(ctx, G) {
+  ctx.strokeStyle = '#ffe66d';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (const b of G.bullets) { ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * 0.018, b.y - b.vy * 0.018); }
+  ctx.stroke();
+  if (G.muzzle) {
+    ctx.save();
+    ctx.shadowBlur = 18; ctx.shadowColor = '#ffd23e';
+    ctx.fillStyle = '#fff3b0';
+    ctx.beginPath(); ctx.arc(G.muzzle.x, G.muzzle.y, 7, 0, 6.29); ctx.fill();
+    ctx.restore();
   }
 }

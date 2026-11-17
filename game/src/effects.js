@@ -1,76 +1,72 @@
-// Juice: particles (sparks, smoke, blood puffs, muzzle flashes, pickup sparkles),
-// skid marks left by hard turns, and the screen shake that sells a crash or a
-// gunshot. Data only — the renderer draws what is here, and step() ages it.
+// Vice Harbor — visual effects: a pooled particle system (sparks, smoke, muzzle
+// smoke, cash sparkles), fading skid marks laid by drifting tyres, and screen
+// shake that decays after crashes and gunfire. Pure presentation: no game rules.
 
-const MAX_PARTICLES = 240;
-const MAX_SKIDS = 160;
+import { clamp } from './geo.js';
 
-export function createEffects() {
+export function createEffects(rng) {
   const particles = [];
   const skids = [];
   let shake = 0;
 
-  return {
-    particles,
-    skids,
-    /** How hard the camera is shaking right now (0 when calm). */
-    shakeAmount() {
-      return shake;
-    },
-    burst(x, y, color, count, speed, life, size) {
-      for (let i = 0; i < count; i += 1) {
-        if (particles.length >= MAX_PARTICLES) return;
-        const angle = Math.random() * Math.PI * 2;
-        const velocity = speed * (0.4 + Math.random() * 0.6);
-        particles.push({
-          x, y,
-          vx: Math.cos(angle) * velocity,
-          vy: Math.sin(angle) * velocity,
-          life: life * (0.6 + Math.random() * 0.4),
-          maxLife: life,
-          color,
-          size: size * (0.7 + Math.random() * 0.6),
-        });
-      }
-    },
-    sparks(x, y) {
-      this.burst(x, y, '#ffd23f', 10, 260, 0.45, 3);
-      this.burst(x, y, '#ff8a3d', 6, 180, 0.35, 2);
-    },
-    smoke(x, y) {
-      this.burst(x, y, '#8b93a3', 5, 40, 0.9, 6);
-    },
-    muzzle(x, y, angle) {
-      this.burst(x + Math.cos(angle) * 22, y + Math.sin(angle) * 22, '#ffe9a8', 5, 200, 0.12, 3);
-    },
-    sparkle(x, y, color) {
-      this.burst(x, y, color, 12, 120, 0.7, 3);
-    },
-    addSkid(x, y, angle) {
-      skids.push({ x, y, angle, life: 2.4 });
-      if (skids.length > MAX_SKIDS) skids.shift();
-    },
-    addShake(amount) {
-      shake = Math.min(18, shake + amount);
-    },
-    step(dt) {
-      for (let i = particles.length - 1; i >= 0; i -= 1) {
-        const p = particles[i];
-        p.life -= dt;
-        if (p.life <= 0) {
-          particles.splice(i, 1);
-          continue;
-        }
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        p.vx *= 0.96;
-        p.vy *= 0.96;
-      }
-      for (let i = skids.length - 1; i >= 0; i -= 1) {
-        skids[i].life -= dt;
-        if (skids[i].life <= 0) skids.splice(i, 1);
-      }
-      shake = Math.max(0, shake - dt * 26);
-    },
-  };
+  function burst(x, y, count, color, speed) {
+    for (let i = 0; i < count; i += 1) {
+      if (particles.length > 420) particles.shift();
+      const a = rng.range(0, Math.PI * 2);
+      const s = rng.range(20, speed || 170);
+      particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rng.range(0.25, 0.8), max: 0.8, color, size: rng.range(1.5, 3.6) });
+    }
+  }
+
+  function smoke(x, y, count) {
+    for (let i = 0; i < (count || 1); i += 1) {
+      if (particles.length > 420) particles.shift();
+      particles.push({ x: x + rng.range(-5, 5), y: y + rng.range(-5, 5), vx: rng.range(-9, 9), vy: rng.range(-24, -8), life: rng.range(0.7, 1.5), max: 1.5, color: 'rgba(120,126,148,0.5)', size: rng.range(4, 9) });
+    }
+  }
+
+  function addSkid(x, y, angle) {
+    skids.push({ x, y, angle, life: 5 });
+    if (skids.length > 300) skids.shift();
+  }
+
+  function addShake(amount) { shake = clamp(shake + amount, 0, 13); }
+
+  function update(dt) {
+    shake = Math.max(0, shake - dt * 22);
+    for (let i = particles.length - 1; i >= 0; i -= 1) {
+      const p = particles[i];
+      p.life -= dt;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= 0.92; p.vy *= 0.92;
+    }
+    for (let i = skids.length - 1; i >= 0; i -= 1) { skids[i].life -= dt; if (skids[i].life <= 0) skids.splice(i, 1); }
+  }
+
+  function shakeOffset() {
+    if (shake <= 0.1) return { x: 0, y: 0 };
+    return { x: rng.range(-shake, shake), y: rng.range(-shake, shake) };
+  }
+
+  function drawUnder(ctx) {
+    for (const s of skids) {
+      ctx.save();
+      ctx.translate(s.x, s.y); ctx.rotate(s.angle);
+      ctx.fillStyle = `rgba(10,10,14,${clamp(s.life / 5, 0, 0.55)})`;
+      ctx.fillRect(-7, -2, 14, 4);
+      ctx.restore();
+    }
+  }
+
+  function drawOver(ctx) {
+    for (const p of particles) {
+      ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  return { burst, smoke, addSkid, addShake, update, shakeOffset, drawUnder, drawOver };
 }
