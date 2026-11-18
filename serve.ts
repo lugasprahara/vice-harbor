@@ -1,6 +1,7 @@
-// Vice Harbor — tiny local static server for game/ (Node 22, standard library only).
-// Run `node serve.ts`, then open http://localhost:8080 to play. It maps the handful of
-// MIME types a canvas game needs, refuses paths that escape game/, and does nothing else.
+// Vice Harbor v3 — tiny static development server for game/ (Node 22, stdlib only).
+// Usage: node serve.ts [--port 8080] then open http://localhost:8080 in desktop Chrome.
+// Serves only files inside game/, refuses anything that climbs out of it, and sends
+// the MIME types a canvas game needs. A convenience for local play, nothing more.
 import { createReadStream, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
